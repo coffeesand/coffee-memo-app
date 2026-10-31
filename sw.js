@@ -1,4 +1,4 @@
-const CACHE_NAME = 'coffee-memo-v3';
+const CACHE_NAME = 'coffee-memo-v4';
 const APP_SHELL = [
   './index.html',
   './manifest.json',
@@ -23,19 +23,21 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Cache-first for the app shell, falling back to network (and caching what we fetch).
+// Network-first for this site's own files (so updates show up), falling back to the cache when offline.
+// Requests to other origins (e.g. api.github.com for sync) are NOT handled here and go straight to the network.
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request).then((response) => {
+    fetch(event.request, { cache: 'no-cache' })
+      .then((response) => {
         if (response.ok) {
           const clone = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
         }
         return response;
-      }).catch(() => cached);
-    })
+      })
+      .catch(() => caches.match(event.request))
   );
 });

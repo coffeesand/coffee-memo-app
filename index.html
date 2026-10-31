@@ -287,7 +287,7 @@
 
   .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
   .field label { font-size: 12px; color: var(--text-secondary); }
-  .field input[type="text"], .field textarea {
+  .field input[type="text"], .field input[type="password"], .field textarea {
     font-family: inherit;
     font-size: 14px;
     padding: 9px 11px;
@@ -542,6 +542,19 @@
         <input type="file" id="import-file-input" accept="application/json,.json,.txt,text/plain" hidden />
       </div>
     </div>
+    <div class="settings-section">
+      <h3>クラウド同期（GitHub）</h3>
+      <p class="settings-hint">非公開(Private)のGitHubリポジトリにデータを保存して、PCとスマホで共有します。トークンはこの端末のブラウザにだけ保存され、公開ページのコードには含まれません。端末ごとに設定してください。</p>
+      <div class="field"><label>ユーザー名（owner）</label><input type="text" id="sync-owner" autocomplete="off" autocapitalize="off" /></div>
+      <div class="field"><label>リポジトリ名（例: coffee-memo-data）</label><input type="text" id="sync-repo" autocomplete="off" autocapitalize="off" /></div>
+      <div class="field"><label>アクセストークン（Fine-grained / Contents: Read and write）</label><input type="password" id="sync-token" autocomplete="off" /></div>
+      <div class="export-import-row">
+        <button class="secondary-btn" id="sync-save-btn" type="button">保存して同期</button>
+        <button class="secondary-btn" id="sync-now-btn" type="button">今すぐ同期</button>
+        <button class="secondary-btn" id="sync-off-btn" type="button">接続解除</button>
+      </div>
+      <p class="settings-hint" id="sync-status" style="margin-top:8px;">未接続</p>
+    </div>
   </div>
 </div>
 
@@ -553,6 +566,9 @@
 
   const NOTES_KEY = 'coffeeMemo.notes';
   const CATEGORIES_KEY = 'coffeeMemo.categories';
+  const TOMB_KEY = 'coffeeMemo.deleted';
+  const CATS_TS_KEY = 'coffeeMemo.catsTs';
+  const SYNC_CFG_KEY = 'coffeeMemo.sync';
   const CAT_PALETTE = ['series-floral', 'series-fruity', 'series-sour', 'series-roasted', 'series-spices', 'series-nutty', 'series-sweet', 'series-green', 'series-other'];
   const MAX_IMAGE_DIM = 1280;
   const IMAGE_QUALITY = 0.82;
@@ -638,11 +654,27 @@
   function loadNotes() {
     try { return JSON.parse(localStorage.getItem(NOTES_KEY) || '[]'); } catch { return []; }
   }
-  function saveNotes(notes) { localStorage.setItem(NOTES_KEY, JSON.stringify(notes)); }
+  function loadTombs() {
+    try { return JSON.parse(localStorage.getItem(TOMB_KEY) || '{}'); } catch { return {}; }
+  }
+  // 削除されたメモのIDを記録して、他の端末でも削除を反映できるようにする
+  function saveNotes(notes) {
+    const ids = new Set(notes.map((n) => n.id));
+    const tombs = loadTombs();
+    loadNotes().forEach((p) => { if (!ids.has(p.id)) tombs[p.id] = Date.now(); });
+    ids.forEach((id) => { delete tombs[id]; });
+    localStorage.setItem(TOMB_KEY, JSON.stringify(tombs));
+    localStorage.setItem(NOTES_KEY, JSON.stringify(notes));
+    scheduleSync();
+  }
   function loadCategories() {
     try { return JSON.parse(localStorage.getItem(CATEGORIES_KEY) || '[]'); } catch { return []; }
   }
-  function saveCategories(cats) { localStorage.setItem(CATEGORIES_KEY, JSON.stringify(cats)); }
+  function saveCategories(cats) {
+    localStorage.setItem(CATEGORIES_KEY, JSON.stringify(cats));
+    localStorage.setItem(CATS_TS_KEY, String(Date.now()));
+    scheduleSync();
+  }
 
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
@@ -1145,6 +1177,181 @@
     };
     reader.readAsText(file);
   });
+
+  // ---------- GitHub同期 ----------
+  const syncStatusEl = document.getElementById('sync-status');
+  const syncOwnerEl = document.getElementById('sync-owner');
+  const syncRepoEl = document.getElementById('sync-repo');
+  const syncTokenEl = document.getElementById('sync-token');
+  function syncCfg() { try { return JSON.parse(localStorage.getItem(SYNC_CFG_KEY) || 'null'); } catch { return null; } }
+  function setSyncStatus(msg) { syncStatusEl.textContent = msg; }
+  const b64enc = (str) => btoa(unescape(encodeURIComponent(str)));
+  const b64dec = (str) => decodeURIComponent(escape(atob(str.replace(/\s/g, ''))));
+
+  async function gh(path, { method = 'GET', body, raw = false } = {}) {
+    const c = syncCfg();
+    return fetch(`https://api.github.com/repos/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/contents/${path}`, {
+      method,
+      cache: 'no-store',
+      headers: {
+        Authorization: 'Bearer ' + c.token,
+        Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  }
+  function httpError(status) {
+    if (status === 401) return 'トークンが無効か期限切れです';
+    if (status === 403) return '権限不足です（Contents: Read and write を確認）';
+    if (status === 404) return 'リポジトリが見つかりません（名前・権限を確認）';
+    return 'HTTP ' + status;
+  }
+
+  function canon(d) {
+    const dl = {};
+    Object.keys(d.deleted).sort().forEach((k) => { dl[k] = d.deleted[k]; });
+    return JSON.stringify({
+      notes: [...d.notes].sort((a, b) => (a.id < b.id ? -1 : 1)),
+      categories: d.categories,
+      deleted: dl,
+      catsTs: d.catsTs,
+    });
+  }
+
+  function mergeData(remote) {
+    const rNotes = Array.isArray(remote.notes) ? remote.notes : [];
+    const rCats = Array.isArray(remote.categories) ? remote.categories : [];
+    const deleted = Object.assign({}, remote.deleted || {});
+    const lTombs = loadTombs();
+    Object.keys(lTombs).forEach((id) => { deleted[id] = Math.max(deleted[id] || 0, lTombs[id]); });
+
+    const lTs = Number(localStorage.getItem(CATS_TS_KEY) || 0);
+    const rTs = Number(remote.catsTs || 0);
+    let cats, catsTs;
+    const idMap = {};
+    if (lTs === 0 || rTs === 0) {
+      // どちらかが未同期: IDまたは名前が同じカテゴリは同一とみなして統合する
+      cats = categories.slice();
+      rCats.forEach((rc) => {
+        const same = cats.find((c) => c.id === rc.id || c.name === rc.name);
+        if (same) idMap[rc.id] = same.id; else cats.push(rc);
+      });
+      catsTs = Date.now();
+    } else if (rTs > lTs) { cats = rCats; catsTs = rTs; }
+    else { cats = categories.slice(); catsTs = lTs; }
+
+    const map = new Map();
+    notes.forEach((n) => map.set(n.id, n));
+    rNotes.forEach((rn) => {
+      const n2 = Object.assign({}, rn, { categoryIds: (rn.categoryIds || []).map((x) => idMap[x] || x) });
+      const ln = map.get(n2.id);
+      if (!ln || (n2.updatedAt || 0) > (ln.updatedAt || 0)) map.set(n2.id, n2);
+    });
+    const merged = [...map.values()].filter((n) => !(deleted[n.id] && deleted[n.id] >= (n.updatedAt || 0)));
+    return { notes: merged, categories: cats, deleted, catsTs };
+  }
+
+  function applyMerged(m) {
+    const before = canon({ notes, categories, deleted: loadTombs(), catsTs: Number(localStorage.getItem(CATS_TS_KEY) || 0) });
+    notes = m.notes;
+    categories = m.categories;
+    localStorage.setItem(NOTES_KEY, JSON.stringify(notes));
+    localStorage.setItem(CATEGORIES_KEY, JSON.stringify(categories));
+    localStorage.setItem(TOMB_KEY, JSON.stringify(m.deleted));
+    localStorage.setItem(CATS_TS_KEY, String(m.catsTs));
+    return before !== canon(m);
+  }
+
+  // 画像: リポジトリの images/<id>.txt にdataURLを保存して共有
+  async function syncImages(m) {
+    const need = new Set();
+    m.notes.forEach((n) => (n.imageIds || []).forEach((i) => need.add(i)));
+    if (!need.size) return false;
+    const r = await gh('images');
+    const remoteNames = new Set();
+    if (r.status === 200) (await r.json()).forEach((f) => remoteNames.add(f.name));
+    else if (r.status !== 404) throw new Error(httpError(r.status));
+    const local = new Set((await getAllImages()).map((i) => i.id));
+    let downloaded = false;
+    for (const id of need) {
+      const hasRemote = remoteNames.has(id + '.txt');
+      if (local.has(id) && !hasRemote) {
+        const res = await gh(`images/${id}.txt`, { method: 'PUT', body: { message: 'sync image', content: b64enc(await getImage(id)) } });
+        if (!res.ok && res.status !== 422) throw new Error(httpError(res.status));
+      } else if (!local.has(id) && hasRemote) {
+        const res = await gh(`images/${id}.txt`, { raw: true });
+        if (res.ok) { await putImage(id, await res.text()); downloaded = true; }
+      }
+    }
+    return downloaded;
+  }
+
+  let syncing = false, syncQueued = false, syncTimer = null;
+  function scheduleSync() {
+    if (!syncCfg()) return;
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(() => syncNow(), 2000);
+  }
+  async function syncNow(manual) {
+    if (!syncCfg()) return;
+    if (syncing) { syncQueued = true; return; }
+    syncing = true;
+    setSyncStatus('同期中…');
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const r = await gh('data.json');
+        let remote = {}, sha;
+        if (r.status === 200) { const j = await r.json(); sha = j.sha; remote = JSON.parse(b64dec(j.content)); }
+        else if (r.status !== 404) throw new Error(httpError(r.status));
+        const merged = mergeData(remote);
+        const changed = applyMerged(merged);
+        const imgChanged = await syncImages(merged);
+        if (changed || imgChanged) { renderCategoryBar(); renderNotesList(); renderSettingsCatList(); }
+        const cur = r.status === 200
+          ? canon({ notes: remote.notes || [], categories: remote.categories || [], deleted: remote.deleted || {}, catsTs: Number(remote.catsTs || 0) })
+          : '';
+        const out = canon(merged);
+        if (out === cur) break;
+        const put = await gh('data.json', { method: 'PUT', body: { message: 'sync ' + new Date().toISOString(), content: b64enc(out), sha } });
+        if (put.ok) break;
+        if (put.status === 409 || put.status === 422) continue; // 他端末が先に更新 → 再取得してやり直し
+        throw new Error(httpError(put.status));
+      }
+      setSyncStatus('最終同期: ' + new Date().toLocaleTimeString('ja-JP'));
+      if (manual) showToast('同期しました');
+    } catch (e) {
+      setSyncStatus('同期エラー: ' + e.message);
+      if (manual) showToast('同期に失敗しました');
+    } finally {
+      syncing = false;
+      if (syncQueued) { syncQueued = false; scheduleSync(); }
+    }
+  }
+
+  (function initSyncUi() {
+    const c = syncCfg();
+    if (c) { syncOwnerEl.value = c.owner; syncRepoEl.value = c.repo; syncTokenEl.value = c.token; }
+    document.getElementById('sync-save-btn').addEventListener('click', () => {
+      const owner = syncOwnerEl.value.trim(), repo = syncRepoEl.value.trim(), token = syncTokenEl.value.trim();
+      if (!owner || !repo || !token) { showToast('3項目すべて入力してください'); return; }
+      localStorage.setItem(SYNC_CFG_KEY, JSON.stringify({ owner, repo, token }));
+      syncNow(true);
+    });
+    document.getElementById('sync-now-btn').addEventListener('click', () => {
+      if (!syncCfg()) { showToast('先に接続設定を保存してください'); return; }
+      syncNow(true);
+    });
+    document.getElementById('sync-off-btn').addEventListener('click', () => {
+      if (!confirm('接続を解除します（この端末のデータは残ります）。よろしいですか？')) return;
+      localStorage.removeItem(SYNC_CFG_KEY);
+      syncTokenEl.value = '';
+      setSyncStatus('未接続');
+    });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncNow(); });
+    setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, 60000);
+    if (c) syncNow();
+  })();
 
   // ---------- 初期化 ----------
   renderCategoryBar();
