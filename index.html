@@ -537,6 +537,31 @@
     .note-card, .note-thumb, .image-thumb-wrap img { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   }
 
+  /* ---------- 確認ポップアップ（操作した場所のすぐ近くに出る） ---------- */
+  .pop-backdrop { position: fixed; inset: 0; z-index: 130; background: transparent; }
+  .pop-box {
+    position: fixed;
+    z-index: 131;
+    width: min(280px, calc(100vw - 16px));
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.55);
+    padding: 14px;
+  }
+  .pop-msg { margin: 0 0 12px; font-size: 13px; line-height: 1.6; color: var(--text-primary); white-space: pre-wrap; }
+  .pop-input {
+    width: 100%; margin: 0 0 12px; font-family: inherit; font-size: 14px;
+    padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--surface-1); color: var(--text-primary);
+  }
+  .pop-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .pop-actions button { font-family: inherit; font-size: 13px; padding: 8px 14px; border-radius: 6px; cursor: pointer; }
+  .pop-cancel { background: transparent; color: var(--text-secondary); border: 1px solid var(--border); }
+  .pop-ok { background: var(--brand); color: #1a1408; border: 1px solid transparent; font-weight: 700; }
+  .pop-ok.danger { background: transparent; color: var(--status-critical); border: 1px solid var(--status-critical); }
+  @media (hover: none) { .pop-actions button { padding: 11px 16px; font-size: 14px; } }
+
   /* ---------- Settings modal ---------- */
   .settings-cat-row {
     display: flex;
@@ -948,6 +973,77 @@
     toastTimer = setTimeout(() => toastEl.classList.remove('visible'), 2200);
   }
 
+  // ---------- 確認ポップアップ（ブラウザ標準の confirm/prompt の代わり） ----------
+  // 直前に操作した場所（クリック/タップ位置）のすぐ近くに出すので、削除ボタンから視線・マウスが遠くならない
+  let lastPoint = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+  document.addEventListener('pointerdown', (e) => { lastPoint = { x: e.clientX, y: e.clientY }; }, true);
+  document.addEventListener('click', (e) => { // キーボード操作（detail===0）のときは押した要素の位置を使う
+    if (e.detail === 0 && e.target.getBoundingClientRect) {
+      const r = e.target.getBoundingClientRect();
+      lastPoint = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }
+  }, true);
+
+  function showPopup({ message, input, okLabel = 'OK', danger = false }) {
+    return new Promise((resolve) => {
+      const at = lastPoint;
+      const backdrop = document.createElement('div');
+      backdrop.className = 'pop-backdrop';
+      const box = document.createElement('div');
+      box.className = 'pop-box';
+      box.setAttribute('role', 'alertdialog');
+      const msg = document.createElement('p');
+      msg.className = 'pop-msg';
+      msg.textContent = message;
+      box.appendChild(msg);
+      let field = null;
+      if (input !== undefined) {
+        field = document.createElement('input');
+        field.type = 'text';
+        field.className = 'pop-input';
+        field.value = input;
+        box.appendChild(field);
+      }
+      const actions = document.createElement('div');
+      actions.className = 'pop-actions';
+      const cancel = document.createElement('button');
+      cancel.type = 'button'; cancel.className = 'pop-cancel'; cancel.textContent = 'キャンセル';
+      const ok = document.createElement('button');
+      ok.type = 'button'; ok.className = 'pop-ok' + (danger ? ' danger' : ''); ok.textContent = okLabel;
+      actions.appendChild(cancel); actions.appendChild(ok);
+      box.appendChild(actions);
+      document.body.appendChild(backdrop);
+      document.body.appendChild(box);
+
+      // 操作位置の少し下に出す。画面外にはみ出す場合は上や端に寄せる
+      const r = box.getBoundingClientRect();
+      let left = Math.max(8, Math.min(at.x - r.width / 2, window.innerWidth - r.width - 8));
+      let top = at.y + 12;
+      if (top + r.height > window.innerHeight - 8) top = Math.max(8, at.y - r.height - 12);
+      box.style.left = left + 'px';
+      box.style.top = top + 'px';
+
+      const finish = (v) => {
+        document.removeEventListener('keydown', onKey, true);
+        backdrop.remove(); box.remove();
+        resolve(v);
+      };
+      const onKey = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); finish(field ? null : false); }
+        else if (e.key === 'Enter' && field && document.activeElement === field) { e.preventDefault(); finish(field.value); }
+      };
+      document.addEventListener('keydown', onKey, true);
+      backdrop.addEventListener('pointerdown', (e) => { e.preventDefault(); finish(field ? null : false); });
+      backdrop.addEventListener('contextmenu', (e) => { e.preventDefault(); });
+      cancel.addEventListener('click', () => finish(field ? null : false));
+      ok.addEventListener('click', () => finish(field ? field.value : true));
+      (field || cancel).focus({ preventScroll: true }); // 誤操作防止のため、確認系は「キャンセル」にフォーカス
+      if (field) field.select();
+    });
+  }
+  const askConfirm = (message, okLabel = 'OK', danger = false) => showPopup({ message, okLabel, danger });
+  const askText = (message, initial, okLabel = '変更') => showPopup({ message, input: initial, okLabel });
+
   // ---------- テキストの自動リンク化 ----------
   function escapeHtml(s) {
     return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1205,8 +1301,8 @@
   }
 
   // カテゴリ削除（設定画面・メモ編集画面の両方から使う）。メモ自体は消えず、カテゴリだけ外れる
-  function deleteCategory(cat) {
-    if (!confirm(`カテゴリ「${cat.name}」を削除しますか？（メモは削除されません）`)) return;
+  async function deleteCategory(cat) {
+    if (!(await askConfirm(`カテゴリ「${cat.name}」を削除しますか？\n（メモは削除されません）`, '削除', true))) return;
     categories = categories.filter((c) => c.id !== cat.id);
     saveCategories(categories);
     notes.forEach((n) => { n.categoryIds = n.categoryIds.filter((id) => id !== cat.id); });
@@ -1346,7 +1442,7 @@
 
   async function deleteNote(note) {
     if (!note) return;
-    if (!confirm('このメモを削除しますか？')) return;
+    if (!(await askConfirm('このメモを削除しますか？', '削除', true))) return;
     for (const imgId of note.imageIds) await deleteImage(imgId);
     notes = notes.filter((n) => n.id !== note.id);
     saveNotes(notes);
@@ -1506,7 +1602,7 @@
     reader.onload = async () => {
       const raw = String(reader.result);
       if (isJson) {
-        if (!confirm('現在のデータをインポート内容で上書きします。よろしいですか？')) return;
+        if (!(await askConfirm('現在のデータをインポート内容で上書きします。よろしいですか？', '上書きする', true))) return;
         try {
           const payload = JSON.parse(raw);
           notes = Array.isArray(payload.notes) ? payload.notes : [];
@@ -1527,7 +1623,7 @@
           showToast('ファイルの読み込みに失敗しました');
         }
       } else {
-        if (!confirm('テキストファイルの内容を新しいメモとして追加します。よろしいですか？')) return;
+        if (!(await askConfirm('テキストファイルの内容を新しいメモとして追加します。よろしいですか？', '追加する'))) return;
         try {
           const newNotes = parseNotesFromText(raw);
           notes = notes.concat(newNotes);
@@ -1709,8 +1805,8 @@
       if (!syncCfg()) { showToast('先に接続設定を保存してください'); return; }
       syncNow(true);
     });
-    document.getElementById('sync-off-btn').addEventListener('click', () => {
-      if (!confirm('接続を解除します（この端末のデータは残ります）。よろしいですか？')) return;
+    document.getElementById('sync-off-btn').addEventListener('click', async () => {
+      if (!(await askConfirm('接続を解除します（この端末のデータは残ります）。よろしいですか？', '解除する', true))) return;
       localStorage.removeItem(SYNC_CFG_KEY);
       syncTokenEl.value = '';
       setSyncStatus('未接続');
@@ -1796,8 +1892,8 @@
     try { document.execCommand('copy'); done(); } catch { showToast('コピーに失敗しました'); }
     ta.remove();
   }
-  function renameCategory(cat) {
-    const name = (prompt('カテゴリ名を変更', cat.name) || '').trim();
+  async function renameCategory(cat) {
+    const name = ((await askText('カテゴリ名を変更', cat.name)) || '').trim();
     if (!name || name === cat.name) return;
     cat.name = name;
     saveCategories(categories);
