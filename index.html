@@ -53,7 +53,7 @@
     --series-17: #c25bd0;
     --series-18: #7d8aa6;
 
-    --cols: 2; /* PC表示のカード列数（設定の 大=1 / 中=2 / 小=3） */
+    --cols: 2; /* PC表示のカード列数（設定の 広め=1 / 標準=2 / 狭め=3） */
   }
 
   * { box-sizing: border-box; }
@@ -578,7 +578,7 @@
     #settings-overlay .modal-box { max-width: 720px; border-radius: 12px; }
     .pc-only-setting { display: block; }
   }
-  /* 幅が狭めのPCでは「小」でも最大2列にして、カードが細くなりすぎないようにする */
+  /* 幅が狭めのPCでは「狭め」でも最大2列にして、カードが細くなりすぎないようにする */
   @media (min-width: 1024px) and (max-width: 1279px) {
     main.notes-list { grid-template-columns: repeat(min(var(--cols), 2), minmax(0, 1fr)); }
   }
@@ -667,12 +667,12 @@
       </button>
     </div>
     <div class="settings-section pc-only-setting">
-      <h3>カードの大きさ（PC表示）</h3>
-      <p class="settings-hint">メモ一覧のカードの大きさです。大きいほど1枚が横に広く、並ぶ数が減ります。</p>
+      <h3>表示幅（PC表示）</h3>
+      <p class="settings-hint">メモ一覧の表示幅です。広めほど1枚が横に広く、並ぶ列数が減ります。</p>
       <div class="export-import-row width-opts" id="width-opts">
-        <button class="secondary-btn" type="button" data-size="l">大（1列・全幅）</button>
-        <button class="secondary-btn" type="button" data-size="m">中（2列）</button>
-        <button class="secondary-btn" type="button" data-size="s">小（3列）</button>
+        <button class="secondary-btn" type="button" data-size="l">広め（1列・全幅）</button>
+        <button class="secondary-btn" type="button" data-size="m">標準（2列）</button>
+        <button class="secondary-btn" type="button" data-size="s">狭め（3列）</button>
       </div>
     </div>
     <div class="settings-section">
