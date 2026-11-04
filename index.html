@@ -97,6 +97,9 @@
     -webkit-tap-highlight-color: transparent;
   }
 
+  html.modal-open, html.modal-open body { overflow: hidden; }
+  .lightbox-overlay { overscroll-behavior: contain; }
+
   .app-shell {
     max-width: 640px;
     margin: 0 auto;
@@ -307,6 +310,7 @@
     z-index: 50;
   }
   .modal-overlay[hidden] { display: none; }
+  .modal-overlay { overscroll-behavior: contain; }
   .modal-box {
     background: var(--surface-1);
     border: 1px solid var(--border);
@@ -315,6 +319,7 @@
     max-width: 640px;
     max-height: 92vh;
     overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 18px 18px 24px;
   }
   @media (min-width: 700px) {
@@ -481,11 +486,24 @@
   }
   .lb-count[hidden] { display: none; }
 
-  .field-label-row { display: flex; justify-content: space-between; align-items: center; }
-  .link-btn { background: none; border: none; color: var(--text-muted); font-size: 12px; cursor: pointer; padding: 2px 4px; }
-  .link-btn:hover, .link-btn.on { color: var(--status-critical); }
-  .cat-chip.manage { border-color: var(--status-critical); }
-  .chip-del { color: var(--status-critical); font-weight: 700; margin-left: 2px; }
+  /* カテゴリチップの削除ボタン: PCはホバー、スマホは長押しで表示 */
+  .chip-del {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 18px; height: 18px;
+    margin: -2px -6px -2px 2px;
+    border-radius: 50%;
+    background: var(--status-critical);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .cat-chip.show-del .chip-del { display: inline-flex; }
+  @media (hover: hover) { .cat-chip:hover .chip-del { display: inline-flex; } }
+  .cat-chip { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 
   /* ---------- Settings modal ---------- */
   .settings-cat-row {
@@ -666,10 +684,7 @@
       <textarea id="note-body-input" placeholder="URL・レシピ・感想・アイデアなど自由に書いてください"></textarea>
     </div>
     <div class="field">
-      <div class="field-label-row">
-        <label>カテゴリ</label>
-        <button class="link-btn" id="cat-manage-btn" type="button">削除する</button>
-      </div>
+      <label>カテゴリ</label>
       <div class="cat-picker" id="editor-cat-picker"></div>
     </div>
     <div class="field">
@@ -913,6 +928,46 @@
     });
   }
 
+  // ---------- カテゴリチップの削除UI ----------
+  // PC: カーソルを乗せると×が出る / スマホ: 長押しで×が出る。×を押すと削除（確認あり）
+  function attachCatChip(chip, cat, onTap) {
+    const del = document.createElement('span');
+    del.className = 'chip-del';
+    del.setAttribute('role', 'button');
+    del.setAttribute('aria-label', `カテゴリ「${cat.name}」を削除`);
+    del.textContent = '×';
+    del.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); deleteCategory(cat); });
+    chip.appendChild(del);
+
+    let timer = null, longPressed = false;
+    const cancel = () => { clearTimeout(timer); timer = null; };
+    chip.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.chip-del')) return;
+      longPressed = false;
+      cancel();
+      timer = setTimeout(() => {
+        longPressed = true;
+        document.querySelectorAll('.cat-chip.show-del').forEach((c) => { if (c !== chip) c.classList.remove('show-del'); });
+        chip.classList.add('show-del');
+        if (navigator.vibrate) { try { navigator.vibrate(15); } catch {} }
+      }, 500);
+    });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => chip.addEventListener(ev, () => {
+      cancel();
+      if (longPressed) setTimeout(() => { longPressed = false; }, 400); // 長押し直後のclickを無視するため少し保持
+    }));
+    chip.addEventListener('contextmenu', (e) => e.preventDefault());
+    chip.onclick = (e) => {
+      if (longPressed) return;
+      if (chip.classList.contains('show-del')) { chip.classList.remove('show-del'); return; } // ×表示中にチップ本体をタップ→閉じる
+      onTap(e);
+    };
+  }
+  // チップ以外をタップしたら×表示を閉じる
+  document.addEventListener('click', (e) => {
+    document.querySelectorAll('.cat-chip.show-del').forEach((c) => { if (!c.contains(e.target)) c.classList.remove('show-del'); });
+  });
+
   // ---------- カテゴリバー（一覧フィルタ） ----------
   let activeCategoryIds = new Set();
   let searchQuery = '';
@@ -932,10 +987,10 @@
       chip.className = 'cat-chip' + (active ? ' active' : '');
       chip.style.setProperty('--cat-color', categoryColorVar(cat));
       chip.innerHTML = `<span class="dot" style="background:${categoryColorVar(cat)}"></span>${escapeHtml(cat.name)}`;
-      chip.onclick = () => {
+      attachCatChip(chip, cat, () => {
         if (activeCategoryIds.has(cat.id)) activeCategoryIds.delete(cat.id); else activeCategoryIds.add(cat.id);
         renderCategoryBar(); renderNotesList();
-      };
+      });
       categoryBarEl.appendChild(chip);
     });
   }
@@ -1133,24 +1188,11 @@
     editorImageIds = note ? note.imageIds.slice() : [];
     editorPendingNewImageIds = new Set();
     deleteNoteBtn.hidden = !note;
-    editorCatManage = false;
-    syncCatManageBtn();
     renderEditorCatPicker();
     renderEditorImages();
     editorOverlay.hidden = false;
     if (!note) setTimeout(() => noteBodyInput.focus(), 50);
   }
-
-  const catManageBtn = document.getElementById('cat-manage-btn');
-  function syncCatManageBtn() {
-    catManageBtn.textContent = editorCatManage ? '完了' : '削除する';
-    catManageBtn.classList.toggle('on', editorCatManage);
-  }
-  catManageBtn.addEventListener('click', () => {
-    editorCatManage = !editorCatManage;
-    syncCatManageBtn();
-    renderEditorCatPicker();
-  });
 
   async function closeEditor(discardPendingImages) {
     if (discardPendingImages) {
@@ -1175,7 +1217,6 @@
     renderNotesList();
   }
 
-  let editorCatManage = false; // true の間、チップに削除ボタンを表示
   function renderEditorCatPicker() {
     editorCatPicker.innerHTML = '';
     categories.forEach((cat) => {
@@ -1185,19 +1226,10 @@
       chip.className = 'cat-chip selectable' + (active ? ' active' : '');
       chip.style.setProperty('--cat-color', categoryColorVar(cat));
       chip.innerHTML = `<span class="dot" style="background:${categoryColorVar(cat)}"></span>${escapeHtml(cat.name)}`;
-      if (editorCatManage) {
-        chip.classList.add('manage');
-        const x = document.createElement('span');
-        x.className = 'chip-del';
-        x.textContent = '×';
-        chip.appendChild(x);
-        chip.onclick = () => deleteCategory(cat);
-      } else {
-        chip.onclick = () => {
-          if (editorSelectedCatIds.has(cat.id)) editorSelectedCatIds.delete(cat.id); else editorSelectedCatIds.add(cat.id);
-          renderEditorCatPicker();
-        };
-      }
+      attachCatChip(chip, cat, () => {
+        if (editorSelectedCatIds.has(cat.id)) editorSelectedCatIds.delete(cat.id); else editorSelectedCatIds.add(cat.id);
+        renderEditorCatPicker();
+      });
       editorCatPicker.appendChild(chip);
     });
     const newInput = document.createElement('input');
@@ -1699,6 +1731,15 @@
     renderWidthOpts();
   });
   renderWidthOpts();
+
+  // ---------- モーダル表示中は背景のスクロールを止める ----------
+  const scrollLockTargets = ['editor-overlay', 'settings-overlay', 'lightbox-overlay'].map((id) => document.getElementById(id));
+  function updateScrollLock() {
+    document.documentElement.classList.toggle('modal-open', scrollLockTargets.some((el) => !el.hidden));
+  }
+  const lockObserver = new MutationObserver(updateScrollLock);
+  scrollLockTargets.forEach((el) => lockObserver.observe(el, { attributes: true, attributeFilter: ['hidden'] }));
+  updateScrollLock();
 
   // ---------- 初期化 ----------
   renderCategoryBar();
