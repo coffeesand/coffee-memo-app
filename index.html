@@ -52,6 +52,38 @@
     --series-16: #5fb9a0;
     --series-17: #c25bd0;
     --series-18: #7d8aa6;
+    --series-19: #d68851;
+    --series-20: #5ec9aa;
+    --series-21: #e146e0;
+    --series-22: #accf57;
+    --series-23: #2e6dc6;
+    --series-24: #b73d4c;
+    --series-25: #22d23f;
+    --series-26: #7435be;
+    --series-27: #dec372;
+    --series-28: #7ccfd3;
+    --series-29: #e669bc;
+    --series-30: #9cd877;
+    --series-31: #2833ad;
+    --series-32: #a04c35;
+    --series-33: #1db86b;
+    --series-34: #8e2fa7;
+    --series-35: #cad651;
+    --series-36: #5ea1c9;
+    --series-37: #e14679;
+    --series-38: #5ccf57;
+    --series-39: #542ec6;
+    --series-40: #b77f3d;
+    --series-41: #22d2b5;
+    --series-42: #be35ad;
+    --series-43: #b0de72;
+    --series-44: #7c95d3;
+    --series-45: #e66a69;
+    --series-46: #77d894;
+    --series-47: #7628ad;
+    --series-48: #a09335;
+    --series-49: #1d9db8;
+    --series-50: #a72f6f;
 
     --cols: 2; /* PC表示のカード列数（設定の 広め=1 / 標準=2 / 狭め=3） */
   }
@@ -449,6 +481,12 @@
   }
   .lb-count[hidden] { display: none; }
 
+  .field-label-row { display: flex; justify-content: space-between; align-items: center; }
+  .link-btn { background: none; border: none; color: var(--text-muted); font-size: 12px; cursor: pointer; padding: 2px 4px; }
+  .link-btn:hover, .link-btn.on { color: var(--status-critical); }
+  .cat-chip.manage { border-color: var(--status-critical); }
+  .chip-del { color: var(--status-critical); font-weight: 700; margin-left: 2px; }
+
   /* ---------- Settings modal ---------- */
   .settings-cat-row {
     display: flex;
@@ -628,7 +666,10 @@
       <textarea id="note-body-input" placeholder="URL・レシピ・感想・アイデアなど自由に書いてください"></textarea>
     </div>
     <div class="field">
-      <label>カテゴリ</label>
+      <div class="field-label-row">
+        <label>カテゴリ</label>
+        <button class="link-btn" id="cat-manage-btn" type="button">削除する</button>
+      </div>
       <div class="cat-picker" id="editor-cat-picker"></div>
     </div>
     <div class="field">
@@ -720,7 +761,8 @@
   const CATS_TS_KEY = 'coffeeMemo.catsTs';
   const SYNC_CFG_KEY = 'coffeeMemo.sync';
   const CAT_PALETTE = ['series-floral', 'series-fruity', 'series-sour', 'series-roasted', 'series-spices', 'series-nutty', 'series-sweet', 'series-green', 'series-other',
-    'series-10', 'series-11', 'series-12', 'series-13', 'series-14', 'series-15', 'series-16', 'series-17', 'series-18'];
+    'series-10', 'series-11', 'series-12', 'series-13', 'series-14', 'series-15', 'series-16', 'series-17', 'series-18',
+    ...Array.from({ length: 32 }, (_, i) => 'series-' + (19 + i))];
   const SIZE_KEY = 'coffeeMemo.cardSize';
   const SIZE_COLS = { l: 1, m: 2, s: 3 };
   const MAX_IMAGE_DIM = 1280;
@@ -1091,11 +1133,24 @@
     editorImageIds = note ? note.imageIds.slice() : [];
     editorPendingNewImageIds = new Set();
     deleteNoteBtn.hidden = !note;
+    editorCatManage = false;
+    syncCatManageBtn();
     renderEditorCatPicker();
     renderEditorImages();
     editorOverlay.hidden = false;
     if (!note) setTimeout(() => noteBodyInput.focus(), 50);
   }
+
+  const catManageBtn = document.getElementById('cat-manage-btn');
+  function syncCatManageBtn() {
+    catManageBtn.textContent = editorCatManage ? '完了' : '削除する';
+    catManageBtn.classList.toggle('on', editorCatManage);
+  }
+  catManageBtn.addEventListener('click', () => {
+    editorCatManage = !editorCatManage;
+    syncCatManageBtn();
+    renderEditorCatPicker();
+  });
 
   async function closeEditor(discardPendingImages) {
     if (discardPendingImages) {
@@ -1105,6 +1160,22 @@
     editingNote = null;
   }
 
+  // カテゴリ削除（設定画面・メモ編集画面の両方から使う）。メモ自体は消えず、カテゴリだけ外れる
+  function deleteCategory(cat) {
+    if (!confirm(`カテゴリ「${cat.name}」を削除しますか？（メモは削除されません）`)) return;
+    categories = categories.filter((c) => c.id !== cat.id);
+    saveCategories(categories);
+    notes.forEach((n) => { n.categoryIds = n.categoryIds.filter((id) => id !== cat.id); });
+    saveNotes(notes);
+    activeCategoryIds.delete(cat.id);
+    editorSelectedCatIds.delete(cat.id);
+    renderEditorCatPicker();
+    renderSettingsCatList();
+    renderCategoryBar();
+    renderNotesList();
+  }
+
+  let editorCatManage = false; // true の間、チップに削除ボタンを表示
   function renderEditorCatPicker() {
     editorCatPicker.innerHTML = '';
     categories.forEach((cat) => {
@@ -1114,10 +1185,19 @@
       chip.className = 'cat-chip selectable' + (active ? ' active' : '');
       chip.style.setProperty('--cat-color', categoryColorVar(cat));
       chip.innerHTML = `<span class="dot" style="background:${categoryColorVar(cat)}"></span>${escapeHtml(cat.name)}`;
-      chip.onclick = () => {
-        if (editorSelectedCatIds.has(cat.id)) editorSelectedCatIds.delete(cat.id); else editorSelectedCatIds.add(cat.id);
-        renderEditorCatPicker();
-      };
+      if (editorCatManage) {
+        chip.classList.add('manage');
+        const x = document.createElement('span');
+        x.className = 'chip-del';
+        x.textContent = '×';
+        chip.appendChild(x);
+        chip.onclick = () => deleteCategory(cat);
+      } else {
+        chip.onclick = () => {
+          if (editorSelectedCatIds.has(cat.id)) editorSelectedCatIds.delete(cat.id); else editorSelectedCatIds.add(cat.id);
+          renderEditorCatPicker();
+        };
+      }
       editorCatPicker.appendChild(chip);
     });
     const newInput = document.createElement('input');
@@ -1304,17 +1384,7 @@
       const delBtn = document.createElement('button');
       delBtn.className = 'icon-btn';
       delBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0v13a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V7h10z"/></svg>';
-      delBtn.addEventListener('click', () => {
-        if (!confirm(`カテゴリ「${cat.name}」を削除しますか？（メモは削除されません）`)) return;
-        categories = categories.filter((c) => c.id !== cat.id);
-        saveCategories(categories);
-        notes.forEach((n) => { n.categoryIds = n.categoryIds.filter((id) => id !== cat.id); });
-        saveNotes(notes);
-        activeCategoryIds.delete(cat.id);
-        renderSettingsCatList();
-        renderCategoryBar();
-        renderNotesList();
-      });
+      delBtn.addEventListener('click', () => deleteCategory(cat));
       row.appendChild(dot);
       row.appendChild(input);
       row.appendChild(delBtn);
