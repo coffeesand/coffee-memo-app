@@ -486,24 +486,56 @@
   }
   .lb-count[hidden] { display: none; }
 
-  /* カテゴリチップの削除ボタン: PCはホバー、スマホは長押しで表示 */
-  .chip-del {
-    display: none;
+  .cat-chip { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+
+  /* ---------- 右クリック／長押しメニュー ---------- */
+  .ctx-menu {
+    position: fixed;
+    z-index: 120;
+    min-width: 200px;
+    max-width: min(320px, calc(100vw - 16px));
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
+    padding: 6px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    font-size: 13px;
+    outline: none;
+    overscroll-behavior: contain;
+  }
+  .ctx-menu[hidden] { display: none; }
+  .ctx-item {
+    display: flex;
     align-items: center;
-    justify-content: center;
-    width: 18px; height: 18px;
-    margin: -2px -6px -2px 2px;
-    border-radius: 50%;
-    background: var(--status-critical);
-    color: #fff;
-    font-size: 12px;
-    font-weight: 700;
-    line-height: 1;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    border-radius: 6px;
+    padding: 9px 12px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 13px;
     cursor: pointer;
   }
-  .cat-chip.show-del .chip-del { display: inline-flex; }
-  @media (hover: hover) { .cat-chip:hover .chip-del { display: inline-flex; } }
-  .cat-chip { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+  .ctx-item:hover, .ctx-item:focus-visible { background: var(--brand-tint); outline: none; }
+  .ctx-item.danger { color: var(--status-critical); }
+  .ctx-item:disabled { color: var(--text-muted); cursor: default; background: none; }
+  .ctx-item .ctx-label { flex: 1; }
+  .ctx-item .ctx-mark { width: 14px; color: var(--brand); flex-shrink: 0; }
+  .ctx-item .ctx-arrow { color: var(--text-muted); }
+  .ctx-sep { height: 1px; background: var(--gridline); margin: 5px 4px; }
+  .ctx-colors { display: grid; grid-template-columns: repeat(10, 22px); gap: 6px; padding: 8px; }
+  .ctx-colors .color-swatch { width: 22px; height: 22px; }
+  @media (hover: none) {
+    .ctx-item { padding: 12px 14px; font-size: 14px; }
+    .ctx-colors { grid-template-columns: repeat(8, 28px); }
+    .ctx-colors .color-swatch { width: 28px; height: 28px; }
+    .note-card, .note-thumb, .image-thumb-wrap img { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  }
 
   /* ---------- Settings modal ---------- */
   .settings-cat-row {
@@ -764,6 +796,7 @@
   </div>
 </div>
 
+<div class="ctx-menu" id="ctx-menu" role="menu" tabindex="-1" hidden></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -929,44 +962,11 @@
   }
 
   // ---------- カテゴリチップの削除UI ----------
-  // PC: カーソルを乗せると×が出る / スマホ: 長押しで×が出る。×を押すと削除（確認あり）
+  // 削除などの操作は、右クリック（スマホは長押し）メニューから行う
   function attachCatChip(chip, cat, onTap) {
-    const del = document.createElement('span');
-    del.className = 'chip-del';
-    del.setAttribute('role', 'button');
-    del.setAttribute('aria-label', `カテゴリ「${cat.name}」を削除`);
-    del.textContent = '×';
-    del.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); deleteCategory(cat); });
-    chip.appendChild(del);
-
-    let timer = null, longPressed = false;
-    const cancel = () => { clearTimeout(timer); timer = null; };
-    chip.addEventListener('pointerdown', (e) => {
-      if (e.target.closest('.chip-del')) return;
-      longPressed = false;
-      cancel();
-      timer = setTimeout(() => {
-        longPressed = true;
-        document.querySelectorAll('.cat-chip.show-del').forEach((c) => { if (c !== chip) c.classList.remove('show-del'); });
-        chip.classList.add('show-del');
-        if (navigator.vibrate) { try { navigator.vibrate(15); } catch {} }
-      }, 500);
-    });
-    ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => chip.addEventListener(ev, () => {
-      cancel();
-      if (longPressed) setTimeout(() => { longPressed = false; }, 400); // 長押し直後のclickを無視するため少し保持
-    }));
-    chip.addEventListener('contextmenu', (e) => e.preventDefault());
-    chip.onclick = (e) => {
-      if (longPressed) return;
-      if (chip.classList.contains('show-del')) { chip.classList.remove('show-del'); return; } // ×表示中にチップ本体をタップ→閉じる
-      onTap(e);
-    };
+    chip.dataset.catId = cat.id; // 右クリック／長押しメニューが対象を特定するために使う
+    chip.onclick = (e) => onTap(e);
   }
-  // チップ以外をタップしたら×表示を閉じる
-  document.addEventListener('click', (e) => {
-    document.querySelectorAll('.cat-chip.show-del').forEach((c) => { if (!c.contains(e.target)) c.classList.remove('show-del'); });
-  });
 
   // ---------- カテゴリバー（一覧フィルタ） ----------
   let activeCategoryIds = new Set();
@@ -1016,6 +1016,7 @@
     for (const note of filtered) {
       const card = document.createElement('div');
       card.className = 'note-card';
+      card.dataset.noteId = note.id;
       card.onclick = () => openEditor(note);
 
       const top = document.createElement('div');
@@ -1056,6 +1057,7 @@
           img.loading = 'lazy';
           img.alt = '';
           thumbEls.push(img);
+          img.dataset.idx = String(thumbEls.length - 1);
           getImage(imgId).then((dataUrl) => { if (dataUrl) img.src = dataUrl; });
           img.onclick = (e) => {
             e.stopPropagation();
@@ -1342,17 +1344,17 @@
     showToast('保存しました');
   });
 
-  deleteNoteBtn.addEventListener('click', async () => {
-    if (!editingNote) return;
+  async function deleteNote(note) {
+    if (!note) return;
     if (!confirm('このメモを削除しますか？')) return;
-    for (const imgId of editingNote.imageIds) await deleteImage(imgId);
-    notes = notes.filter((n) => n.id !== editingNote.id);
+    for (const imgId of note.imageIds) await deleteImage(imgId);
+    notes = notes.filter((n) => n.id !== note.id);
     saveNotes(notes);
-    editorOverlay.hidden = true;
-    editingNote = null;
+    if (editingNote && editingNote.id === note.id) { editorOverlay.hidden = true; editingNote = null; }
     renderNotesList();
     showToast('削除しました');
-  });
+  }
+  deleteNoteBtn.addEventListener('click', () => deleteNote(editingNote));
 
   document.getElementById('fab-add').addEventListener('click', () => openEditor(null));
 
@@ -1731,6 +1733,247 @@
     renderWidthOpts();
   });
   renderWidthOpts();
+
+  // ---------- 右クリック／長押しメニュー ----------
+  const ctxMenu = document.getElementById('ctx-menu');
+  let suppressClickUntil = 0;
+
+  function closeCtxMenu() { ctxMenu.hidden = true; ctxMenu.innerHTML = ''; suppressClickUntil = 0; }
+  function placeCtxMenu(x, y) {
+    ctxMenu.style.left = '0px'; ctxMenu.style.top = '0px';
+    const r = ctxMenu.getBoundingClientRect();
+    const px = Math.max(8, Math.min(x, window.innerWidth - r.width - 8));
+    const py = Math.max(8, Math.min(y, window.innerHeight - r.height - 8));
+    ctxMenu.style.left = px + 'px';
+    ctxMenu.style.top = py + 'px';
+  }
+  // items: { label, onClick, danger, checked, disabled, submenu(): items, custom(): Element } | { sep: true }
+  function renderCtxItems(items, x, y, parentItems) {
+    ctxMenu.innerHTML = '';
+    const list = parentItems ? [{ label: '戻る', back: true }, { sep: true }, ...items] : items;
+    list.forEach((it) => {
+      if (it.sep) { const d = document.createElement('div'); d.className = 'ctx-sep'; ctxMenu.appendChild(d); return; }
+      if (it.custom) { ctxMenu.appendChild(it.custom()); return; }
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'ctx-item' + (it.danger ? ' danger' : '');
+      b.setAttribute('role', 'menuitem');
+      b.disabled = !!it.disabled;
+      const mark = it.back ? '‹' : (it.checked ? '✓' : '');
+      b.innerHTML = `<span class="ctx-mark">${mark}</span><span class="ctx-label"></span>${it.submenu ? '<span class="ctx-arrow">›</span>' : ''}`;
+      b.querySelector('.ctx-label').textContent = it.label;
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (it.back) { renderCtxItems(parentItems, x, y); placeCtxMenu(x, y); return; }
+        if (it.submenu) { renderCtxItems(it.submenu(), x, y, items); placeCtxMenu(x, y); return; }
+        if (it.keepOpen) { it.onClick(); renderCtxItems(items, x, y, parentItems); placeCtxMenu(x, y); return; }
+        closeCtxMenu();
+        it.onClick && it.onClick();
+      });
+      ctxMenu.appendChild(b);
+    });
+  }
+  function showCtxMenu(items, x, y) {
+    if (!items.length) return;
+    suppressClickUntil = Date.now() + 500; // 長押し直後に発生するclickでカードが開かないようにする
+    renderCtxItems(items, x, y);
+    ctxMenu.hidden = false;
+    placeCtxMenu(x, y);
+    ctxMenu.focus({ preventScroll: true });
+  }
+
+  // ---- 項目の組み立て ----
+  function copyText(text) {
+    const done = () => showToast('コピーしました');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, () => legacyCopy(text, done));
+    } else legacyCopy(text, done);
+  }
+  function legacyCopy(text, done) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); done(); } catch { showToast('コピーに失敗しました'); }
+    ta.remove();
+  }
+  function renameCategory(cat) {
+    const name = (prompt('カテゴリ名を変更', cat.name) || '').trim();
+    if (!name || name === cat.name) return;
+    cat.name = name;
+    saveCategories(categories);
+    renderCategoryBar(); renderNotesList(); renderEditorCatPicker(); renderSettingsCatList();
+  }
+  function colorGridItem(cat) {
+    return {
+      custom: () => {
+        const grid = document.createElement('div');
+        grid.className = 'ctx-colors';
+        CAT_PALETTE.forEach((name, i) => {
+          const sw = document.createElement('button');
+          sw.type = 'button';
+          sw.className = 'color-swatch' + (categoryColorIndex(cat) === i ? ' selected' : '');
+          sw.style.background = `var(--${name})`;
+          sw.setAttribute('aria-label', `色 ${i + 1}`);
+          sw.addEventListener('click', (e) => {
+            e.stopPropagation();
+            cat.color = i;
+            saveCategories(categories);
+            closeCtxMenu();
+            renderCategoryBar(); renderNotesList(); renderEditorCatPicker(); renderSettingsCatList();
+          });
+          grid.appendChild(sw);
+        });
+        return grid;
+      },
+    };
+  }
+  function categoryMenuItems(cat, inEditor) {
+    const items = [];
+    if (!inEditor) items.push({ label: 'このカテゴリだけ表示', onClick: () => { activeCategoryIds = new Set([cat.id]); renderCategoryBar(); renderNotesList(); } });
+    items.push({ label: '名前を変更', onClick: () => renameCategory(cat) });
+    items.push({ label: '色を変更', submenu: () => [colorGridItem(cat)] });
+    items.push({ sep: true });
+    items.push({ label: '削除', danger: true, onClick: () => deleteCategory(cat) });
+    return items;
+  }
+  function noteMenuItems(note) {
+    const items = [];
+    items.push({ label: '編集', onClick: () => openEditor(note) });
+    items.push({ label: '本文をコピー', disabled: !note.body, onClick: () => copyText(note.body) });
+    items.push({
+      label: 'カテゴリを変更',
+      submenu: function sub() {
+        if (!categories.length) return [{ label: 'カテゴリがありません', disabled: true }];
+        return categories.map((c) => ({
+          label: c.name,
+          get checked() { return note.categoryIds.includes(c.id); },
+          keepOpen: true,
+          onClick: () => {
+            note.categoryIds = note.categoryIds.includes(c.id) ? note.categoryIds.filter((id) => id !== c.id) : note.categoryIds.concat(c.id);
+            note.updatedAt = Date.now();
+            saveNotes(notes);
+            renderNotesList();
+          },
+        }));
+      },
+    });
+    if (note.imageIds.length) {
+      items.push({ label: '画像を開く', onClick: async () => { openLightbox(await Promise.all(note.imageIds.map(getImage)), 0); } });
+    }
+    items.push({ sep: true });
+    items.push({ label: '削除', danger: true, onClick: () => deleteNote(note) });
+    return items;
+  }
+  function blankMenuItems() {
+    if (!editorOverlay.hidden) return [{ label: '編集を閉じる', onClick: () => closeEditor(true) }];
+    if (!settingsOverlay.hidden) return [{ label: '設定を閉じる', onClick: () => { settingsOverlay.hidden = true; } }];
+    const items = [
+      { label: '新しいメモ', onClick: () => openEditor(null) },
+      { label: '検索', onClick: () => { searchRow.hidden = false; searchInput.focus(); } },
+    ];
+    if (syncCfg()) items.push({ label: '今すぐ同期', onClick: () => syncNow(true) });
+    items.push({ sep: true });
+    items.push({ label: '設定', onClick: () => document.getElementById('settings-btn').click() });
+    return items;
+  }
+  // 右クリック／長押しした要素に応じたメニュー項目。null のときはブラウザ標準メニューを許可する
+  function menuItemsFor(target) {
+    if (!target || !target.closest) return null;
+    if (target.closest('textarea, input, select')) return null; // 入力欄は標準メニュー（コピー・貼り付け等）を残す
+    if (!lightboxOverlay.hidden) return [{ label: '閉じる', onClick: closeLightbox }];
+
+    const chip = target.closest('.cat-chip[data-cat-id]');
+    if (chip) {
+      const cat = categoryById(chip.dataset.catId);
+      if (cat) return categoryMenuItems(cat, !!chip.closest('#editor-cat-picker'));
+    }
+    const wrap = target.closest('.image-thumb-wrap');
+    if (wrap) {
+      const wraps = Array.from(imagePickerRow.querySelectorAll('.image-thumb-wrap'));
+      const idx = wraps.indexOf(wrap);
+      return [
+        { label: '拡大して見る', onClick: () => openLightbox(wraps.map((w) => w.querySelector('img').src), idx) },
+        { sep: true },
+        { label: '画像を削除', danger: true, onClick: () => wrap.querySelector('.image-thumb-remove').click() },
+      ];
+    }
+    const card = target.closest('.note-card');
+    if (card) {
+      const note = notes.find((n) => n.id === card.dataset.noteId);
+      if (note) {
+        let items = noteMenuItems(note);
+        const link = target.closest('a[href]');
+        if (link) {
+          const href = link.getAttribute('href');
+          items = [
+            { label: 'リンクを開く', onClick: () => window.open(href, '_blank', 'noopener,noreferrer') },
+            { label: 'リンクをコピー', onClick: () => copyText(href) },
+            { sep: true },
+          ].concat(items);
+        }
+        const thumb = target.closest('.note-thumb');
+        if (thumb) {
+          const thumbs = Array.from(card.querySelectorAll('.note-thumb'));
+          items = [{ label: '拡大して見る', onClick: () => openLightbox(thumbs.map((t) => t.src), Number(thumb.dataset.idx) || 0) }, { sep: true }].concat(items);
+        }
+        return items;
+      }
+    }
+    return blankMenuItems();
+  }
+
+  // ---- 起動条件 ----
+  document.addEventListener('contextmenu', (e) => {
+    if (ctxMenu.contains(e.target)) { e.preventDefault(); return; }
+    const items = menuItemsFor(e.target);
+    if (items === null) { closeCtxMenu(); return; }
+    e.preventDefault();
+    showCtxMenu(items, e.clientX, e.clientY);
+  });
+  // タッチ端末: 長押し（約0.5秒）で同じメニューを出す。マウスは右クリックで出るので対象外
+  (function initLongPress() {
+    let timer = null, sx = 0, sy = 0;
+    const cancel = () => { clearTimeout(timer); timer = null; };
+    document.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse') return;
+      if (!ctxMenu.contains(e.target)) closeCtxMenu();
+      else return;
+      cancel();
+      const target = e.target; sx = e.clientX; sy = e.clientY;
+      timer = setTimeout(() => {
+        timer = null;
+        const items = menuItemsFor(target);
+        if (items === null) return;
+        if (navigator.vibrate) { try { navigator.vibrate(15); } catch {} }
+        showCtxMenu(items, sx, sy);
+      }, 500);
+    });
+    document.addEventListener('pointermove', (e) => { if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 10) cancel(); });
+    ['pointerup', 'pointercancel'].forEach((ev) => document.addEventListener(ev, cancel));
+    window.addEventListener('scroll', cancel, true);
+  })();
+  // メニューが開いた直後のclick（長押しの指を離したとき）を無効化
+  document.addEventListener('click', (e) => {
+    if (Date.now() < suppressClickUntil && !ctxMenu.contains(e.target)) { e.stopPropagation(); e.preventDefault(); }
+  }, true);
+
+  // ---- 閉じる条件 / キーボード操作 ----
+  document.addEventListener('pointerdown', (e) => { if (e.pointerType === 'mouse' && !ctxMenu.hidden && !ctxMenu.contains(e.target)) closeCtxMenu(); }, true);
+  window.addEventListener('blur', closeCtxMenu);
+  window.addEventListener('resize', closeCtxMenu);
+  window.addEventListener('wheel', (e) => { if (!ctxMenu.hidden && !ctxMenu.contains(e.target)) closeCtxMenu(); }, { passive: true });
+  document.addEventListener('keydown', (e) => {
+    if (ctxMenu.hidden) return;
+    if (e.key === 'Escape') { e.stopImmediatePropagation(); closeCtxMenu(); return; }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const btns = Array.from(ctxMenu.querySelectorAll('.ctx-item:not(:disabled)'));
+      if (!btns.length) return;
+      const i = btns.indexOf(document.activeElement);
+      const next = e.key === 'ArrowDown' ? (i + 1) % btns.length : (i - 1 + btns.length) % btns.length;
+      btns[i === -1 && e.key === 'ArrowUp' ? btns.length - 1 : next].focus();
+    }
+  }, true);
 
   // ---------- モーダル表示中は背景のスクロールを止める ----------
   const scrollLockTargets = ['editor-overlay', 'settings-overlay', 'lightbox-overlay'].map((id) => document.getElementById(id));
