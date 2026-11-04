@@ -53,7 +53,7 @@
     --series-17: #c25bd0;
     --series-18: #7d8aa6;
 
-    --content-max: 960px;
+    --cols: 2; /* PC表示のカード列数（設定の 大=1 / 中=2 / 小=3） */
   }
 
   * { box-sizing: border-box; }
@@ -66,7 +66,7 @@
   }
 
   .app-shell {
-    max-width: var(--content-max);
+    max-width: 640px;
     margin: 0 auto;
     min-height: 100vh;
     padding: 0 0 96px;
@@ -280,7 +280,7 @@
     border: 1px solid var(--border);
     border-radius: 12px 12px 0 0;
     width: 100%;
-    max-width: min(var(--content-max), 900px);
+    max-width: 640px;
     max-height: 92vh;
     overflow-y: auto;
     padding: 18px 18px 24px;
@@ -500,11 +500,14 @@
   }
   .toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+  /* PC専用の設定項目は、スマホ・小さいタブレットでは非表示 */
+  .pc-only-setting { display: none; }
+
   /* ================= PC レイアウト（画面幅 1024px 以上） =================
      スマホ（縦1列・上部ヘッダー）はそのまま。PCでは左サイドバー + 右にカードのグリッド。 */
   @media (min-width: 1024px) {
     .app-shell {
-      max-width: calc(var(--content-max) + 300px);
+      max-width: none; /* PCは画面幅いっぱい */
       display: grid;
       grid-template-columns: 250px minmax(0, 1fr);
       align-items: start;
@@ -543,7 +546,7 @@
       grid-column: 2;
       padding: 24px 28px 0;
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
       align-items: start;
       gap: 16px;
     }
@@ -573,6 +576,11 @@
     #editor-overlay .modal-actions { grid-column: 1 / -1; margin-top: 18px; }
     #editor-overlay .image-thumb-wrap, #editor-overlay .add-image-btn { width: 110px; height: 110px; }
     #settings-overlay .modal-box { max-width: 720px; border-radius: 12px; }
+    .pc-only-setting { display: block; }
+  }
+  /* 幅が狭めのPCでは「小」でも最大2列にして、カードが細くなりすぎないようにする */
+  @media (min-width: 1024px) and (max-width: 1279px) {
+    main.notes-list { grid-template-columns: repeat(min(var(--cols), 2), minmax(0, 1fr)); }
   }
 </style>
 </head>
@@ -658,13 +666,13 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>
       </button>
     </div>
-    <div class="settings-section">
-      <h3>表示幅</h3>
-      <p class="settings-hint">メモ一覧の横幅です。PCでは広いほどカードの列数が増えます（標準=1列／広め=2列／最大=3列）。</p>
+    <div class="settings-section pc-only-setting">
+      <h3>カードの大きさ（PC表示）</h3>
+      <p class="settings-hint">メモ一覧のカードの大きさです。大きいほど1枚が横に広く、並ぶ数が減ります。</p>
       <div class="export-import-row width-opts" id="width-opts">
-        <button class="secondary-btn" type="button" data-w="640">標準</button>
-        <button class="secondary-btn" type="button" data-w="960">広め</button>
-        <button class="secondary-btn" type="button" data-w="1280">最大</button>
+        <button class="secondary-btn" type="button" data-size="l">大（1列・全幅）</button>
+        <button class="secondary-btn" type="button" data-size="m">中（2列）</button>
+        <button class="secondary-btn" type="button" data-size="s">小（3列）</button>
       </div>
     </div>
     <div class="settings-section">
@@ -713,7 +721,8 @@
   const SYNC_CFG_KEY = 'coffeeMemo.sync';
   const CAT_PALETTE = ['series-floral', 'series-fruity', 'series-sour', 'series-roasted', 'series-spices', 'series-nutty', 'series-sweet', 'series-green', 'series-other',
     'series-10', 'series-11', 'series-12', 'series-13', 'series-14', 'series-15', 'series-16', 'series-17', 'series-18'];
-  const WIDTH_KEY = 'coffeeMemo.width';
+  const SIZE_KEY = 'coffeeMemo.cardSize';
+  const SIZE_COLS = { l: 1, m: 2, s: 3 };
   const MAX_IMAGE_DIM = 1280;
   const IMAGE_QUALITY = 0.82;
 
@@ -834,10 +843,10 @@
   function categoryColorIndex(cat) {
     return Number.isInteger(cat.color) && cat.color >= 0 && cat.color < CAT_PALETTE.length ? cat.color : categories.indexOf(cat) % CAT_PALETTE.length;
   }
-  // ---------- 表示幅 ----------
-  function applyWidth(w) { document.documentElement.style.setProperty('--content-max', w + 'px'); }
-  function currentWidth() { const w = Number(localStorage.getItem(WIDTH_KEY)); return [640, 960, 1280].includes(w) ? w : 960; }
-  applyWidth(currentWidth());
+  // ---------- カードの大きさ（PC） ----------
+  function currentSize() { let v = null; try { v = localStorage.getItem(SIZE_KEY); } catch {} return SIZE_COLS[v] ? v : 'm'; }
+  function applySize(v) { document.documentElement.style.setProperty('--cols', SIZE_COLS[v]); }
+  applySize(currentSize());
 
   // ---------- Toast ----------
   const toastEl = document.getElementById('toast');
@@ -1607,16 +1616,16 @@
     if (c) syncNow();
   })();
 
-  // ---------- 表示幅の設定 ----------
+  // ---------- カードの大きさの設定（PC） ----------
   const widthOpts = document.getElementById('width-opts');
   function renderWidthOpts() {
-    widthOpts.querySelectorAll('button').forEach((b) => b.classList.toggle('active', Number(b.dataset.w) === currentWidth()));
+    widthOpts.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.size === currentSize()));
   }
   widthOpts.addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-w]');
+    const b = e.target.closest('button[data-size]');
     if (!b) return;
-    try { localStorage.setItem(WIDTH_KEY, b.dataset.w); } catch {}
-    applyWidth(Number(b.dataset.w));
+    try { localStorage.setItem(SIZE_KEY, b.dataset.size); } catch {}
+    applySize(b.dataset.size);
     renderWidthOpts();
   });
   renderWidthOpts();

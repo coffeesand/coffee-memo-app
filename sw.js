@@ -1,4 +1,4 @@
-const CACHE_NAME = 'coffee-memo-v6';
+const CACHE_NAME = 'coffee-memo-v7';
 const APP_SHELL = [
   './index.html',
   './manifest.json',
